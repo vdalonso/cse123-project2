@@ -1,0 +1,93 @@
+////////////////////////////
+High level code description:
+
+main.c code spawns the sender and receiver threads. input.c takes care of 
+the user's stdin input and feed them as commands to the input command lists
+of senders, each of whom filter out commands intended for itself to process.
+The appropriate sender takes the input command and decides whether it is 
+necessary to partition the message before sending. It prepares frames to be
+sent and either adds to its outgoing buffer if is waiting for an ack/there
+already exists frames in its outgoing buffer or adds it to the outgoing list
+to be sent immediately. Each sender updates the sequence number of the last
+acknowledged frame, and also the next sequence number to assign to frames
+to send for each receiver.
+Each receiver similarly processes incoming message frames, ignoring those not
+intended for it. The receiver keeps track of the next allowed sequence number
+for each sender to determine if the message is a duplicate. If a message is 
+not a duplicate, extract the payload and copy over or concatenate to the 
+existing message from the sender if there is such an existing message. If the
+incoming message is a message end, print out the entire message stored and 
+reset it. The receiver then sends back and acknowledgment frame (adds to 
+outgoing list), regardless of whether the message is a duplicate.
+
+
+//////////////////////////////////////////
+High level description of major functions:
+
+In sender.c:
+
+init_sender(): 
+    Initialise sender member variables (mostly zero initialised).
+
+update_timeout_time(): 
+    Sets the next timeout (var in sender) to be current time + 0.09s.
+
+sender_get_next_expiring_timeval():
+    Return pointer to the timeval struct that holds value of next timeout if
+    the struct holds relevant info. Otherwise, return NULL.
+
+handle_incoming_acks():
+    Loop over incoming ack frames list and only process those intended for the
+    passed in sender. For each such acks, if the frame's seq number matches the
+    one for that sender/receiver pair, update the acked seq num and send out 
+    the next frame in the sender's outgoing buffer if any exists. Always store
+    a copy of the last sent frame in the sender before sending.
+
+handle_input_cmds():
+    Loop over incoming commands and only process those intended for the passed
+    in sender. For each such command, consider the length of the message. If it
+    is greater than the payload length, break the message up into multiple
+    frames (each partitioned message will be nul terminated) with a field
+    indicating which frame contains the end of the message. Otherwise, use 
+    one frame for the entire message if it fits, also indicating that it is the
+    end of the message. If the sender is not waiting for any ack or has any
+    frames in the outgoing buffer, send a frame. Otherwise, add the frame(s)
+    to the sender's outgoing buffer. Always store a copy of the last sent 
+    frame in the sender before sending.
+
+handle_timedout_frames():
+    Get the next timeout time from sender_get_next_expiring_timeval(). If the
+    function returns null, then return, as no relevant timeout exists.
+    Otherwise, get the current time and compare to the timeout time. If the 
+    timeout time has passed, then resend a copy of the last send frame stored 
+    in the sender.
+    
+run_sender():
+    Runs sender by looping and checking for incoming commands or frames. If 
+    any exists, wake up sender to process them using above functions. Also,
+    check if any frame exists in the outgoing frame list to send promptly, and
+    update the sender's timeout prior to each send.
+    
+ 
+In receiver.c:
+
+init_receiver():
+    Initialise sender member variables (mostly zero initialised).
+
+handle_incoming_msgs():
+    Loop over incoming msgs and only process those intended for the passed in
+    receiver. If the message, is outdated/ is a duplicate (checked using seq 
+    num) ignore data. Otherwise, add (concantenate) the payload message to 
+    the current message from the sender, or just copy over if there is no
+    such existing current message. If the incoming message is a message end, 
+    print out the entire message and reset the message stored to nothing. 
+    Update sequence nums appropriately to only accept the next seq num
+    for the sender/receiver pair. Always prepare an acknowledgement frame to 
+    be sent, regardless of whether the message is a duplicate or not.
+    
+run_receiver():
+    Runs receiver by looping and checking for incoming messages. If any exists,
+    wake up receiver and handle the incoming message(s) by calling the
+    handle_incoming_msgs() function. Also send out any acknowledgment frames
+    waiting in the outgoing list.
+
