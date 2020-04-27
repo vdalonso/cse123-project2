@@ -59,8 +59,17 @@ struct Receiver_t {
 
     int recv_id;
 
-    uint8_t* seq_num_arr; // Next expected packet seq num for each sender
+    uint8_t* seq_num_arr; // Next expected packet seq num for each sender.
+    			  // THIS IS LAST FRAME RECEIVED (LFR) + 1
+			  // aka Next Frame Expected (NFE)
     char** messages_arr;  // Pointer to array char pointers)
+
+    //added receiver window size to calculate largest acceptable frame (LAF)
+    //by calculating: LAF = LFR + RWS
+    int RWS;
+
+    char*** window_buffer;
+    int* window_buffer_dim; 
 };
 
 struct Sender_t {
@@ -82,16 +91,23 @@ struct Sender_t {
     struct timeval timeout_time;
 
     // Buffer of next frame charbufs to be sent (to be put in outgoing list)
+    // this will be the"right side" of the window and will slowly enter the window as we receive acks
     LLnode* outgoing_charbuf_buffer;
 
-    char* last_outgoing_charbuf; // holds last frame in case dropped in
-                                 // transmission
 
-    uint8_t* assign_seq_num_arr; // Next seq num to assign corresponding to each
+
+    char* last_outgoing_charbuf; // holds last frame in case dropped in
+                                 // transmission. THIS IF CONVERTED TO FRAME HOLDS
+				 // LAST FRAME SENT (LFS)
+				 // we will change this to be a our window 
+
+    uint8_t* assign_seq_num_arr; // Next seq num to assigon corresponding to each
                                  // receiver
 
     uint8_t* seq_num_arr; // Last seq num to successfully acked corresponding to
-                          // each receiver
+                          // each receiver. THIS IS LAST ACKNOWLEDGE RECEIVED (LAR)
+    //added send window size variable for each sender.
+    int SWS;
 };
 
 enum SendFrame_DstType { ReceiverDst, SenderDst } SendFrame_DstType;

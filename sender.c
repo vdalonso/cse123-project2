@@ -13,9 +13,11 @@ void init_sender(Sender* sender, int id) {
 
     sender->timeout_relevant = 0;
     sender->last_outgoing_charbuf = NULL;
-
+    /*
+    sender->last_outgoing_charbuf = (char**)malloc(8 * sizeof(char*));  
+    memset(sender->last_outgoing_charbuf , '\0' , 8 * sizeof(char*));
+    */
     sender->outgoing_charbuf_buffer = NULL;
-
     // Zero initialise sequence number array corresponding to receivers
     sender->seq_num_arr =
         (uint8_t*) calloc(glb_receivers_array_length, sizeof(uint8_t));
@@ -24,6 +26,7 @@ void init_sender(Sender* sender, int id) {
     // to receivers
     sender->assign_seq_num_arr =
         (uint8_t*) calloc(glb_receivers_array_length, sizeof(uint8_t));
+    sender->SWS=8;
 }
 
 // Update timeout time right after frame sent
@@ -107,6 +110,11 @@ void handle_incoming_acks(Sender* sender, LLnode** outgoing_frames_head_ptr) {
             // If latest ack received, can increment ack seq_num and "reset"
             // timeout Note: Only do if seq num acknowledged is latest (ignore
             // ack for prev)
+	    // FOR PROJECT 2: if sequence number of incoming frame is SeqNumToAck i.e. the smallest seq in window
+	    // slide the window, and mark that frame in our sender->window as acked. 
+	    // if not, check if the value is within the range of the window. if so mark that frame in our sender->window as acked
+	    // a way of marking a frame in window as acked would be to set it to NULLPTR
+	    // but dont slide the window 
             if (ack_frame->seq_num == sender->seq_num_arr[receiver_id]) {
 
                 accepted = 1;
@@ -241,6 +249,10 @@ void handle_input_cmds(Sender* sender, LLnode** outgoing_frames_head_ptr) {
 
                 // Check to see if should send now (last message is acked and
                 // none in buffer)
+		// change sender->last_outgoing_charbuf to a "window empty" boolean
+		// if "if" true then just buffer the frame. last outgoing charbuf will be null if there's nothing we're waiting ack for
+		// else if there is room to send a frame, while  LFS - LAR <= SWS: send a frame
+		// TODO: this will change to support SWP, check if we're free to send a frame according to window size
                 if (sender->last_outgoing_charbuf != NULL ||
                     ll_get_length(sender->outgoing_charbuf_buffer) > 0) {
 
@@ -248,7 +260,12 @@ void handle_input_cmds(Sender* sender, LLnode** outgoing_frames_head_ptr) {
                     ll_append_node(&sender->outgoing_charbuf_buffer,
                                    outgoing_charbuf);
 
-                } else {
+                } 
+		//here, we check if we're able to send a frame given our window constraints, 8 can be in flight at most
+		//i.e. if we've sent off less than 8, send however many more remain
+		//if we can send more do so and add them into last outgoing charbuf array with the correct sequence number order
+		//
+		else {
                     // Ready to send
 
                     // Save frame charbuf for retransmission in case dropped
@@ -295,6 +312,8 @@ void handle_input_cmds(Sender* sender, LLnode** outgoing_frames_head_ptr) {
 
             // Check to see if should send now (last message is acked and none
             // in buffer)
+	    // PROJECT 2 SOLUTION with sender window here as well
+	    // USE OUTGOING_FRAME
             if (sender->last_outgoing_charbuf != NULL ||
                 ll_get_length(sender->outgoing_charbuf_buffer) > 0) {
 

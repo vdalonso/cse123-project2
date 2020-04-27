@@ -16,6 +16,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+void slide_window(Receiver*, int, int);
 void init_receiver(Receiver*, int);
 void* run_receiver(void*);
 
