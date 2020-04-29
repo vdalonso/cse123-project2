@@ -16,6 +16,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+int slide_window_s(Sender*, int);
 void init_sender(Sender*, int);
 void* run_sender(void*);
 

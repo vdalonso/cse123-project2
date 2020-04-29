@@ -12,12 +12,18 @@ void init_sender(Sender* sender, int id) {
     sender->input_framelist_head = NULL;
 
     sender->timeout_relevant = 0;
-    sender->last_outgoing_charbuf = NULL;
-    /*
-    sender->last_outgoing_charbuf = (char**)malloc(8 * sizeof(char*));  
-    memset(sender->last_outgoing_charbuf , '\0' , 8 * sizeof(char*));
-    */
-    sender->outgoing_charbuf_buffer = NULL;
+    //sender->last_outgoing_charbuf = NULL;
+    sender->window_buffer = (char***)malloc(glb_receivers_array_length * sizeof(char**));
+    for(int i=0; i<glb_receivers_array_length; i++){ 
+    	sender->window_buffer[i] = (char**)malloc(8 * sizeof(char*));  
+    	memset(sender->window_buffer[i] , '\0' , 8 * sizeof(char*));
+    }
+    sender->frames_in_flight = (int*)malloc(glb_receivers_array_length * sizeof(int));
+    memset(sender->frames_in_flight , 0 , glb_receivers_array_length * sizeof(int));
+    //change outgoing charbuf buffer to be a double pointer, one buffer per receiver
+    sender->outgoing_charbuf_buffer = (LLnode**)malloc(glb_receivers_array_length * sizeof(LLnode*));
+    for(int i=0; i< glb_receivers_array_length; i++)
+	    sender->outgoing_charbuf_buffer[i] = NULL;
     // Zero initialise sequence number array corresponding to receivers
     sender->seq_num_arr =
         (uint8_t*) calloc(glb_receivers_array_length, sizeof(uint8_t));
@@ -58,13 +64,13 @@ void update_timeout_time(Sender* sender) {
 struct timeval* sender_get_next_expiring_timeval(Sender* sender) {
     // TODO: You should fill in this function so that it returns the next
     // timeout that should occur
-
+	/*		
     // Only return timeout time if waiting for ack and time out info is relevant
     if (sender->last_outgoing_charbuf && sender->timeout_relevant) {
         //		fprintf(stderr, "returning timeout\n");
         return &sender->timeout_time;
     }
-
+	*/
     return NULL;
 }
 
@@ -102,54 +108,74 @@ void handle_incoming_acks(Sender* sender, LLnode** outgoing_frames_head_ptr) {
         // Only çare if acknowledgment is for this sender (otherwise ignore)
         if (ack_frame->dst_id == sender->send_id) {
 
-            //			fprintf(stderr, "Ack frame received for
-            //sender\n");
+            //fprintf(stderr, "Ack frame received for sender\n");
 
             int receiver_id = ack_frame->src_id;
+	    int i = 0;
+            while(i < sender->SWS)
+	    {
+	    	if(sender->window_buffer[receiver_id][i] != NULL){
+			Frame* temp = convert_char_to_frame(sender->window_buffer[receiver_id][i]);
+		        if(temp->seq_num == ack_frame->seq_num)
+			{
+				//fprintf(stderr , "Ack matched one in our sender frame\n");
+				//we got an ACK!
+				sender->window_buffer[receiver_id][i] = NULL;
+				//sender->frames_in_flight[receiver_id]--;
+				break;
+			}	
+		}
+	    	i++;
+	    }
+	    //i will only be less than SWS if and only if we received an ACK
+    	    int slides;
+	    if(i < sender->SWS){
+	    	//slide window
+		slides = slide_window_s(sender , receiver_id);
+	    	//TODO: only change frames in flight when we actually slide, i.e. when i = 0
+		//reduce frames in flight by the number of slides made. if we acked a frame in the middle of window
+		//we dont slide at all because we're still waiting on the smallest frame
+		sender->frames_in_flight[receiver_id] = sender->frames_in_flight[receiver_id] - slides;
+	    }
+	    //fprintf(stderr , "out of sliding portion\n");
 
-            // If latest ack received, can increment ack seq_num and "reset"
+	    // If latest ack received, can increment ack seq_num and "reset"
             // timeout Note: Only do if seq num acknowledged is latest (ignore
             // ack for prev)
-	    // FOR PROJECT 2: if sequence number of incoming frame is SeqNumToAck i.e. the smallest seq in window
-	    // slide the window, and mark that frame in our sender->window as acked. 
-	    // if not, check if the value is within the range of the window. if so mark that frame in our sender->window as acked
-	    // a way of marking a frame in window as acked would be to set it to NULLPTR
-	    // but dont slide the window 
-            if (ack_frame->seq_num == sender->seq_num_arr[receiver_id]) {
-
+            if (i == 0) {
                 accepted = 1;
-
-                //				fprintf(stderr, "Accepted ack arrived
-                //with sender %d, receiver %d, seq_num %d\n", 								ack_frame->dst_id,
-                //ack_frame->src_id, ack_frame->seq_num);
-
-                sender->seq_num_arr[receiver_id]++; // Increment acked seq num
-
-                // Reset last send frame charbuf info since successfully acked
-                free(sender->last_outgoing_charbuf);
-
-                // Important reset as indicates that not waiting for ack
-                sender->last_outgoing_charbuf = NULL;
+		//sender->seq_num_arr is LAR or Last Ack Received (and all before it). Only increment if we got an ack
+		//for the smallest frame in window	
+                //TODO: increase se num arr however many times we slid
+		sender->seq_num_arr[receiver_id] = sender->seq_num_arr[receiver_id] + slides; // Increment acked seq num
+                //free(sender->last_outgoing_charbuf);
+                //sender->last_outgoing_charbuf = NULL;
 
                 // Old timeout value no longer relevant
                 sender->timeout_relevant = 0;
 
                 // If there is message in buffer send it
                 // This accounts for regular and partition case
-                if (ll_get_length(sender->outgoing_charbuf_buffer) > 0) {
+		// TODO: this is if statement "B"
+		// this if statement will also have to have the condition for if the window can or cant move.
+		// remember that this charbuf_buffer is shared for all the receivers. so don't send unless its for the correct receiver.
+                while  (slides > 0 && ll_get_length(sender->outgoing_charbuf_buffer[receiver_id]) > 0) {
 
                     LLnode* next_node =
-                        ll_pop_node(&sender->outgoing_charbuf_buffer);
+                        ll_pop_node(&sender->outgoing_charbuf_buffer[receiver_id]);
 
                     char* outgoing_charbuf = next_node->value;
                     // Save charbuf for retransmission in case dropped
-                    sender->last_outgoing_charbuf = malloc(sizeof(Frame));
-                    memcpy(sender->last_outgoing_charbuf, outgoing_charbuf,
-                           sizeof(Frame));
+		    // this will change for project 2 for it to be put into the window instead
+                    //sender->last_outgoing_charbuf = malloc(sizeof(Frame));
+                    sender->window_buffer[receiver_id][sender->SWS - slides] = outgoing_charbuf;
+		   // memcpy(sender->last_outgoing_charbuf, outgoing_charbuf,
+                   //        sizeof(Frame));
 
                     ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
-
+		    sender->frames_in_flight[receiver_id]++;	
                     free(next_node);
+		    slides--;
                 }
 
             } else {
@@ -158,10 +184,35 @@ void handle_incoming_acks(Sender* sender, LLnode** outgoing_frames_head_ptr) {
                 //						ack_frame->dst_id,
                 //ack_frame->src_id, ack_frame->seq_num);
             }
-        }
+	  
+        }//end of ackframe is for this sender
 
         free(ack_frame);
     }
+}
+
+int slide_window_s(Sender* sender, int receiver_id){
+	char ** temp = (char**)malloc(8 * sizeof(char*));
+	memset(temp , '\0' , 8 * sizeof(char*));
+	int i = 0;
+	//TODO: in the case that i reaches 4, this will segfault. change to check if i < sender->frames in flight first.
+	//frames in flight will always be bound between 0 and SWS
+	//DONE 0
+	while( i < sender->frames_in_flight[receiver_id])
+	{	
+		if(sender->window_buffer[receiver_id][i] != NULL)
+			break;
+		i++;
+	}
+	int j = 0;
+	while(j < sender->SWS - i){
+		temp[j] = sender->window_buffer[receiver_id][i+j];
+		j++;
+	}
+	free(sender->window_buffer[receiver_id]);
+	sender->window_buffer[receiver_id] = (char**)malloc(8*sizeof(char*));
+	sender->window_buffer[receiver_id] = temp;
+	return i;
 }
 
 void handle_input_cmds(Sender* sender, LLnode** outgoing_frames_head_ptr) {
@@ -249,15 +300,15 @@ void handle_input_cmds(Sender* sender, LLnode** outgoing_frames_head_ptr) {
 
                 // Check to see if should send now (last message is acked and
                 // none in buffer)
-		// change sender->last_outgoing_charbuf to a "window empty" boolean
+		// change sender->last_outgoing_charbuf to a "window full" boolean
 		// if "if" true then just buffer the frame. last outgoing charbuf will be null if there's nothing we're waiting ack for
 		// else if there is room to send a frame, while  LFS - LAR <= SWS: send a frame
 		// TODO: this will change to support SWP, check if we're free to send a frame according to window size
-                if (sender->last_outgoing_charbuf != NULL ||
-                    ll_get_length(sender->outgoing_charbuf_buffer) > 0) {
+                if (sender->frames_in_flight[dst_id] == sender->SWS  ||
+                    ll_get_length(sender->outgoing_charbuf_buffer[dst_id]) > 0) {
 
                     // Put frame in buffer
-                    ll_append_node(&sender->outgoing_charbuf_buffer,
+                    ll_append_node(&sender->outgoing_charbuf_buffer[dst_id],
                                    outgoing_charbuf);
 
                 } 
@@ -266,14 +317,30 @@ void handle_input_cmds(Sender* sender, LLnode** outgoing_frames_head_ptr) {
 		//if we can send more do so and add them into last outgoing charbuf array with the correct sequence number order
 		//
 		else {
-                    // Ready to send
+                    
+		      int i = 0;
+		      while(i < sender->SWS){
+		     		if(sender->window_buffer[dst_id][i] == NULL){
+		     			sender->window_buffer[dst_id][i] = outgoing_charbuf;
+		     			ll_append_node(outgoing_frames_head_ptr , outgoing_charbuf);
+		     			sender->frames_in_flight[dst_id]++;
+					break;
+		     		}
+		     		i++;
+		      }
+		      if(i >= sender->SWS){
+		      		sender->frames_in_flight[dst_id] = sender->SWS;
+		      		ll_append_node(&sender->outgoing_charbuf_buffer[dst_id] , outgoing_charbuf);
+		      }
+		    	
+		    // Ready to send
 
                     // Save frame charbuf for retransmission in case dropped
-                    sender->last_outgoing_charbuf = malloc(sizeof(Frame));
-                    memcpy(sender->last_outgoing_charbuf, outgoing_charbuf,
-                           sizeof(Frame));
+                    //sender->last_outgoing_charbuf = malloc(sizeof(Frame));
+                    //memcpy(sender->last_outgoing_charbuf, outgoing_charbuf,
+                    //       sizeof(Frame));
 
-                    ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
+                    //ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
                 }
 
                 free(outgoing_frame);
@@ -314,23 +381,40 @@ void handle_input_cmds(Sender* sender, LLnode** outgoing_frames_head_ptr) {
             // in buffer)
 	    // PROJECT 2 SOLUTION with sender window here as well
 	    // USE OUTGOING_FRAME
-            if (sender->last_outgoing_charbuf != NULL ||
-                ll_get_length(sender->outgoing_charbuf_buffer) > 0) {
+            if (sender->frames_in_flight[dst_id] == 8 ||
+                ll_get_length(sender->outgoing_charbuf_buffer[dst_id]) > 0) {
 
                 // Put frame in buffer
-                ll_append_node(&sender->outgoing_charbuf_buffer,
+                ll_append_node(&sender->outgoing_charbuf_buffer[dst_id],
                                outgoing_charbuf);
 
             } else {
-                // Ready to send
-
+                    
+		      int i = 0;
+		      while(i < sender->SWS){
+		     		if(sender->window_buffer[dst_id][i] == NULL){
+		     			sender->window_buffer[dst_id][i] = outgoing_charbuf;
+		     			ll_append_node(outgoing_frames_head_ptr , outgoing_charbuf);
+		     			sender->frames_in_flight[dst_id]++;
+					break;
+		     		}
+		     		i++;
+		      }
+		      if(i >= sender->SWS){
+		      		sender->frames_in_flight[dst_id] = sender->SWS;
+		      		ll_append_node(&sender->outgoing_charbuf_buffer[dst_id] , outgoing_charbuf);
+		      }	    
+		    	
+		// Ready to send
+		/*
                 // Save frame charbuf for retransmission in case dropped
                 sender->last_outgoing_charbuf = malloc(sizeof(Frame));
                 memcpy(sender->last_outgoing_charbuf, outgoing_charbuf,
                        sizeof(Frame));
 
                 ll_append_node(outgoing_frames_head_ptr, outgoing_charbuf);
-            }
+            	*/
+	    }
 
             free(outgoing_frame);
         }
@@ -358,7 +442,7 @@ void handle_timedout_frames(Sender* sender, LLnode** outgoing_frames_head_ptr) {
     // If timed out and no ack received, resend frame charbuf
     if (diff >= 0) {
         //		fprintf(stderr, "timed out with diff = %ld\n", diff);
-
+	/*
         // If not acked, last charbuf pointer in sender will be non-null
         if (sender->last_outgoing_charbuf) {
             // Create copy to resend (so that send_msg_to_receiver frees the
@@ -380,10 +464,13 @@ void handle_timedout_frames(Sender* sender, LLnode** outgoing_frames_head_ptr) {
             // Add to list to resend last frame charbuf info
             ll_append_node(outgoing_frames_head_ptr, resend_charbuf);
 
-        } else {
+        } 
+	
+	else {
             fprintf(stderr,
                     "Error: should not reach here: timeout yet acked\n");
         }
+	*/
     }
 }
 

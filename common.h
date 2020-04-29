@@ -92,14 +92,15 @@ struct Sender_t {
 
     // Buffer of next frame charbufs to be sent (to be put in outgoing list)
     // this will be the"right side" of the window and will slowly enter the window as we receive acks
-    LLnode* outgoing_charbuf_buffer;
+    LLnode** outgoing_charbuf_buffer;
 
 
 
-    char* last_outgoing_charbuf; // holds last frame in case dropped in
+    char*** window_buffer; // holds last frame in case dropped in
                                  // transmission. THIS IF CONVERTED TO FRAME HOLDS
 				 // LAST FRAME SENT (LFS)
 				 // we will change this to be a our window 
+    int* frames_in_flight;
 
     uint8_t* assign_seq_num_arr; // Next seq num to assigon corresponding to each
                                  // receiver
